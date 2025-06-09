@@ -13,7 +13,7 @@ def configuration(parent_package="", top_path=None):
     if os.name == "posix":
         libraries.append("m")
 
-    config = Configuration("deepforest", parent_package, top_path)
+    config = Configuration("probabilistic_deep_forest", parent_package, top_path)
     config.add_subpackage("tree")
 
     config.add_extension(
