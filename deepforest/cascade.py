@@ -766,7 +766,7 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             return self.n_estimators * self.n_outputs_
 
     # flake8: noqa: E501
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None, dX=None):
         X, y = check_X_y(
             X,
             y,
@@ -775,6 +775,15 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             in ("continuous-multioutput", "multiclass-multioutput")
             else False,
         )
+
+
+        if dX is None:
+            # If no initial uncertainty is provided, assume zero uncertainty for compatibility
+            dX = np.zeros_like(X)
+        else:
+            # Ensure dX has the same number of samples as X
+            if dX.shape[0] != X.shape[0]:
+                raise ValueError("X and dX must have the same number of samples.")
 
         self._check_input(X, y)
         self._validate_params()
@@ -787,9 +796,9 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             random_state=self.random_state,
         )
 
-        # Bin the training data
+        # Keep a permanent copy of the original binned data and its uncertainty
         X_train_ = self._bin_data(binner_, X, is_training_data=True)
-        X_train_ = self.buffer_.cache_data(0, X_train_, is_training_data=True)
+        dX_train_ = dX
 
         # =====================================================================
         # Training Stage
@@ -820,8 +829,9 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             print("{} Fitting cascade layer = {:<2}".format(_utils.ctime(), 0))
 
         tic = time.time()
-        X_aug_train_ = layer_.fit_transform(
-            X_train_, y, sample_weight=sample_weight
+        # The first layer is trained ONLY on the original data
+        X_aug_train_, dX_aug_train_ = layer_.fit_transform(
+            X_train_, y, dX=dX_train_, sample_weight=sample_weight
         )
         toc = time.time()
         training_time = toc - tic
@@ -850,32 +860,57 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
         self.n_layers_ += 1
 
         # Pre-allocate the global array on storing training data
-        X_middle_train_ = _utils.init_array(X_train_, self.n_aug_features_)
+        #X_middle_train_ = _utils.init_array(X_train_, self.n_aug_features_)
+        #X_middle_train_dX_ = _utils.init_array(dX_train_, self.n_aug_features_)
+
+                # ===================================================================
+        # ADD THIS VERIFICATION BLOCK
+        # ===================================================================
+        print("\n" + "="*50)
+        print("--- [VERIFICATION] Analysis of Layer 0 Output ---")
+        print(f"OOB Performance (Accuracy) of Layer 0: {pivot*100:.2f}%")
+        
+        # Analyze the augmented features (mean predictions)
+        print(f"\nShape of Augmented Features (X_aug): {X_aug_train_.shape}")
+        print("Sample of Augmented Features (first 3 samples, first 5 features):")
+        print(X_aug_train_[:3, :5])
+
+        # Analyze the augmented uncertainties
+        print(f"\nShape of Augmented Uncertainties (dX_aug): {dX_aug_train_.shape}")
+        print("Sample of Augmented Uncertainties (first 3 samples, first 5 features):")
+        print(dX_aug_train_[:3, :5])
+        
+        print("\nStatistics for the first uncertainty vector (dX_aug[:, 0]):")
+
+
 
         # ====================================================================
         # Main loop on the training stage
         # ====================================================================
 
         while self.n_layers_ < self.max_layers:
+            layer_idx = self.n_layers_
 
             # Set the binner
-            binner_ = Binner(
+            aug_binner_ = Binner(
                 n_bins=self.n_bins,
                 bin_subsample=self.bin_subsample,
                 bin_type=self.bin_type,
                 random_state=self.random_state,
             )
+            #X_aug_binned_ = self._bin_data(aug_binner_, X_aug_train_, is_training_data=True)
 
-            X_binned_aug_train_ = self._bin_data(
-                binner_, X_aug_train_, is_training_data=True
-            )
+            # Construct the input for the current layer.
+            #X_middle_train = np.hstack([X_train_, X_aug_binned_])
+            X_middle_train = np.hstack([X_train_, X_aug_train_])
+            dX_middle_train = np.hstack([dX_train_, dX_aug_train_])
 
-            X_middle_train_ = _utils.merge_array(
-                X_middle_train_, X_binned_aug_train_, self.n_features_
-            )
+            # We only bin the augmented part, not the whole X_middle_train
+            #X_middle_train[:, self.n_features_:] = aug_binner_.fit_transform(
+            #    X_middle_train[:, self.n_features_:]
+            #)
 
             # Build a cascade layer
-            layer_idx = self.n_layers_
             layer_ = self._make_layer(
                 layer_idx=layer_idx,
                 n_outputs=self.n_outputs_,
@@ -893,17 +928,17 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
                 verbose=self.verbose,
             )
 
-            X_middle_train_ = self.buffer_.cache_data(
-                layer_idx, X_middle_train_, is_training_data=True
-            )
+            #X_middle_train_ = self.buffer_.cache_data(
+            #    layer_idx, X_middle_train_, is_training_data=True
+            #)
 
             if self.verbose > 0:
                 msg = "{} Fitting cascade layer = {:<2}"
                 print(msg.format(_utils.ctime(), layer_idx))
 
             tic = time.time()
-            X_aug_train_ = layer_.fit_transform(
-                X_middle_train_, y, sample_weight=sample_weight
+            new_X_aug, new_dX_aug = layer_.fit_transform(
+                X_middle_train, y, dX=dX_middle_train, sample_weight=sample_weight
             )
             toc = time.time()
             training_time = toc - tic
@@ -929,15 +964,14 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
 
             if self._if_improved(new_pivot, pivot, self.delta):
 
-                # Update the cascade layer
-                self._set_layer(layer_idx, layer_)
-                self._set_binner(layer_idx, binner_)
-                self.n_layers_ += 1
-
-                # Performance calibration
-                n_counter = 0
+                # If the model improved, we keep the new augmented features for the next loop
+                X_aug_train_ = new_X_aug
+                dX_aug_train_ = new_dX_aug
                 pivot = new_pivot
-
+                self._set_layer(layer_idx, layer_)
+                self._set_binner(layer_idx, aug_binner_) 
+                self.n_layers_ += 1
+                n_counter = 0
                 if self.use_predictor:
                     snapshot_X_aug_train_ = np.copy(X_aug_train_)
             else:
@@ -1423,7 +1457,7 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
     @deepforest_model_doc(
         """Build a deep forest using the training data.""", "classifier_fit"
     )
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None, dX=None):
         X, y = check_X_y(
             X,
             y,
@@ -1435,9 +1469,9 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
         # Check the input for classification
         y = self._encode_class_labels(y)
 
-        super().fit(X, y, sample_weight)
+        super().fit(X, y, sample_weight, dX)
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, dX=None):
         """
         Predict class probabilities for X.
 
@@ -1454,6 +1488,10 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
         """
         X = check_array(X)
 
+        if dX is None:
+            # If no uncertainty is provided for prediction, assume zero
+            dX = np.zeros_like(X)
+        
         if not self.is_fitted_:
             raise AttributeError("Please fit the model first.")
         self._check_input(X)
@@ -1462,66 +1500,41 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
             print("{} Start to evalute the model:".format(_utils.ctime()))
 
         binner_ = self._get_binner(0)
-        X_test = self._bin_data(binner_, X, is_training_data=False)
-        X_middle_test_ = _utils.init_array(X_test, self.n_aug_features_)
+        X_test_ = self._bin_data(binner_, X, is_training_data=False)
+        dX_test_ = dX
 
-        for layer_idx in range(self.n_layers_):
+        layer_0 = self._get_layer(0)
+        X_aug_test, dX_aug_test = layer_0.transform(X_test_, dX=dX_test_)
+
+        for layer_idx in range(1, self.n_layers_):
             layer = self._get_layer(layer_idx)
 
             if self.verbose > 0:
                 msg = "{} Evaluating cascade layer = {:<2}"
                 print(msg.format(_utils.ctime(), layer_idx))
 
-            if layer_idx == 0:
-                X_aug_test_ = layer.transform(X_test)
-            elif layer_idx < self.n_layers_ - 1:
-                binner_ = self._get_binner(layer_idx)
-                X_aug_test_ = self._bin_data(
-                    binner_, X_aug_test_, is_training_data=False
-                )
-                X_middle_test_ = _utils.merge_array(
-                    X_middle_test_, X_aug_test_, self.n_features_
-                )
-                X_aug_test_ = layer.transform(X_middle_test_)
-            else:
-                binner_ = self._get_binner(layer_idx)
-                X_aug_test_ = self._bin_data(
-                    binner_, X_aug_test_, is_training_data=False
-                )
-                X_middle_test_ = _utils.merge_array(
-                    X_middle_test_, X_aug_test_, self.n_features_
-                )
+            # Construct the input for the current layer
+            # [Original Binned Features, Augmented Features from Previous Layer]
+            aug_binner_ = self._get_binner(layer_idx)
+            X_aug_binned = self._bin_data(aug_binner_, X_aug_test, is_training_data=False)
 
-                # Skip calling the `transform` if not using the predictor
-                if self.use_predictor:
-                    X_aug_test_ = layer.transform(X_middle_test_)
+            X_middle_test = np.hstack([X_test_, X_aug_binned])
+            dX_middle_test = np.hstack([dX_test_, dX_aug_test])
 
-        if self.use_predictor:
+            # Get the current layer and transform the data
+            layer = self._get_layer(layer_idx)
+            
+            # The output becomes the new augmented features for the next iteration
+            X_aug_test, dX_aug_test = layer.transform(X_middle_test, dX=dX_middle_test)
 
-            if self.verbose > 0:
-                print("{} Evaluating the predictor".format(_utils.ctime()))
-
-            binner_ = self._get_binner(self.n_layers_)
-            X_aug_test_ = self._bin_data(
-                binner_, X_aug_test_, is_training_data=False
-            )
-            X_middle_test_ = _utils.merge_array(
-                X_middle_test_, X_aug_test_, self.n_features_
-            )
-
-            predictor = self.buffer_.load_predictor(self.predictor_)
-            proba = predictor.predict_proba(X_middle_test_)
-        else:
-            if self.n_layers_ > 1:
-                proba = layer.predict_full(X_middle_test_)
-                proba = _utils.merge_proba(proba, self.n_outputs_)
-            else:
-                # Directly merge results with one cascade layer only
-                proba = _utils.merge_proba(X_aug_test_, self.n_outputs_)
+        # 3. Final Prediction
+        # After the last layer, X_aug_test contains the final set of class vectors.
+        # We average these to get the final prediction.
+        proba = _utils.merge_proba(X_aug_test, self.n_outputs_)
 
         return proba
 
-    def predict(self, X):
+    def predict(self, X, dX=None):
         """
         Predict class for X.
 
@@ -1538,7 +1551,7 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
         """
         X = check_array(X)
 
-        proba = self.predict_proba(X)
+        proba = self.predict_proba(X, dX=dX)
         y = self._decode_class_labels(np.argmax(proba, axis=1))
         return y
 

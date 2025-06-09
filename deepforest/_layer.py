@@ -198,7 +198,7 @@ class ClassificationCascadeLayer(BaseCascadeLayer, ClassifierMixin):
             verbose=verbose,
         )
 
-    def fit_transform(self, X, y, sample_weight=None):
+    def fit_transform(self, X, y, dX=None, sample_weight=None):
 
         self._validate_params()
         n_samples, self.n_features = X.shape
@@ -291,7 +291,7 @@ class RegressionCascadeLayer(BaseCascadeLayer, RegressorMixin):
             verbose=verbose,
         )
 
-    def fit_transform(self, X, y, sample_weight=None):
+    def fit_transform(self, X, y, dX=None, sample_weight=None):
 
         self._validate_params()
         n_samples, self.n_features = X.shape
@@ -375,9 +375,11 @@ class CustomCascadeLayer(object):
         # Internal container
         self.estimators_ = {}
 
-    def fit_transform(self, X, y, sample_weight=None):
+    def fit_transform(self, X, y, dX=None, sample_weight=None):
+        
         n_samples, _ = X.shape
         X_aug = []
+        X_aug_dX = []
 
         # Parameters were already validated by upstream methods
         for estimator_idx, estimator in enumerate(self.dummy_estimators_):
@@ -396,9 +398,19 @@ class CustomCascadeLayer(object):
                     msg.format(_utils.ctime(), estimator_idx, self.layer_idx)
                 )
 
-            kfold_estimator.fit_transform(X, y, sample_weight)
+            kfold_estimator.fit_transform(X, y, dX=dX, sample_weight=sample_weight)
             X_aug.append(kfold_estimator.oob_decision_function_)
+            X_aug_dX.append(kfold_estimator.oob_decision_function_dX_)
             key = "{}-{}-custom".format(self.layer_idx, estimator_idx)
+
+            # ADD THIS BLOCK FOR VERIFICATION
+            # ===================================================================
+            #print(f"\n--- [Verification Step 2: KFoldWrapper Output for Estimator {estimator_idx}] ---")
+            #print(f"OOB Predictions (Mean) shape: {kfold_estimator.oob_decision_function_.shape}")
+            #print(f"OOB Predictions (dX Dev) shape: {kfold_estimator.oob_decision_function_dX_.shape}")
+            #print("Sample of OOB dX Dev:\n", kfold_estimator.oob_decision_function_dX_[:3, :])
+            # ===================================================================
+            
 
             if self.partial_mode:
                 # Cache the fitted estimator in out-of-core mode
@@ -428,16 +440,19 @@ class CustomCascadeLayer(object):
             )
 
         X_aug = np.hstack(X_aug)
-        return X_aug
+        X_aug_dX = np.hstack(X_aug_dX)
+        return X_aug, X_aug_dX
 
-    def transform(self, X):
+    def transform(self, X, dX=None):
         """Preserved for the naming consistency."""
-        return self.predict_full(X)
+        return self.predict_full(X, dX=dX)
 
-    def predict_full(self, X):
+    def predict_full(self, X, dX=None):
         """Return the concatenated predictions from all base estimators."""
         n_samples, _ = X.shape
         pred = np.zeros((n_samples, self.n_outputs * self.n_estimators))
+        pred_dX = np.zeros((n_samples, self.n_outputs * self.n_estimators))
+        
         for idx, (key, estimator) in enumerate(self.estimators_.items()):
             if self.verbose > 1:
                 msg = "{} - Evaluating estimator = custom_{} in layer = {}"
@@ -447,6 +462,9 @@ class CustomCascadeLayer(object):
                 estimator = self.buffer.load_estimator(estimator)
 
             left, right = self.n_outputs * idx, self.n_outputs * (idx + 1)
-            pred[:, left:right] += estimator.predict(X)
+            
+            est_pred, est_pred_dX = estimator.predict(X, dX=dX)
+            pred[:, left:right] += est_pred
+            pred_dX[:, left:right] += est_pred_dX
 
-        return pred
+        return pred, pred_dX

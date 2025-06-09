@@ -16,6 +16,7 @@ class KFoldWrapper(object):
     """
     A general wrapper for base estimators without the characteristic of
     out-of-bag (OOB) estimation.
+    MODIFIED to support uncertainty propagation.
     """
 
     def __init__(
@@ -43,14 +44,18 @@ class KFoldWrapper(object):
         """Return the list of internal estimators."""
         return self.estimators_
 
-    def fit_transform(self, X, y, sample_weight=None):
+    # Accepts dX and returns both mean and dX OOB predictions
+    def fit_transform(self, X, y, dX=None, sample_weight=None):
         n_samples, _ = X.shape
         splitter = KFold(
             n_splits=self.n_splits,
             shuffle=True,
             random_state=self.random_state,
         )
+
+        # OOB arrays for mean and standard deviation
         self.oob_decision_function_ = np.zeros((n_samples, self.n_outputs))
+        self.oob_decision_function_dX_ = np.zeros((n_samples, self.n_outputs))
 
         for k, (train_idx, val_idx) in enumerate(splitter.split(X, y)):
             estimator = copy.deepcopy(self.dummy_estimator_)
@@ -58,47 +63,89 @@ class KFoldWrapper(object):
             if self.verbose > 1:
                 msg = "{} - - Fitting the base estimator with fold = {}"
                 print(msg.format(_utils.ctime(), k))
-
+            
+            # Prepare data for this fold
+            X_train, y_train = X[train_idx], y[train_idx]
+            X_val = X[val_idx]
+            X_train_dX = dX[train_idx] if dX is not None else None
+            X_val_dX = dX[val_idx] if dX is not None else None
+            
             # Fit on training samples
+            # Assumes your custom estimator's `fit` can handle dX if needed.
+            fit_args = {"dX": X_train_dX} if X_train_dX is not None else {}
             if sample_weight is None:
-                # Notice that a bunch of base estimators do not take
-                # `sample_weight` as a valid input.
-                estimator.fit(X[train_idx], y[train_idx])
+                estimator.fit(X_train, y_train, **fit_args)
             else:
                 estimator.fit(
-                    X[train_idx], y[train_idx], sample_weight[train_idx]
+                    X_train, y_train, sample_weight=sample_weight[train_idx], **fit_args
                 )
 
             # Predict on hold-out samples
+            # both the mean prediction and its standard deviation.
             if self.is_classifier:
-                self.oob_decision_function_[
-                    val_idx
-                ] += estimator.predict_proba(X[val_idx])
-            else:
-                val_pred = estimator.predict(X[val_idx])
-
+                if not hasattr(estimator, "predict_proba_with_dX"):
+                    msg = ("Custom estimator must have a `predict_proba_with_dX` "
+                           "method to be used for uncertainty estimation.")
+                    raise AttributeError(msg)
+                
+                # Get both mean and dX from the custom estimator
+                mean_pred, dX_pred = estimator.predict_proba_with_dX(X_val, dX=X_val_dX)
+                self.oob_decision_function_[val_idx] += mean_pred
+                self.oob_decision_function_dX_[val_idx] += dX_pred
+            else: # Regression
+                if not hasattr(estimator, "predict_with_dX"):
+                     msg = ("Custom regressor must have a `predict_with_dX` "
+                           "method to be used for uncertainty estimation.")
+                     raise AttributeError(msg)
+                
+                mean_pred, dX_pred = estimator.predict_with_dX(X_val, dX=X_val_dX)
+                
                 # Reshape for univariate regression
-                if self.n_outputs == 1 and len(val_pred.shape) == 1:
-                    val_pred = np.expand_dims(val_pred, 1)
-                self.oob_decision_function_[val_idx] += val_pred
+                if self.n_outputs == 1:
+                    if len(mean_pred.shape) == 1:
+                        mean_pred = np.expand_dims(mean_pred, 1)
+                    if len(dX_pred.shape) == 1:
+                        dX_pred = np.expand_dims(dX, 1)
+                        
+                self.oob_decision_function_[val_idx] += mean_pred
+                self.oob_decision_function_dX_[val_idx] += dX_pred
 
             # Store the estimator
             self.estimators_.append(estimator)
+        
+        return self.oob_decision_function_, self.oob_decision_function_dX_
 
-        return self.oob_decision_function_
 
-    def predict(self, X):
+    def predict(self, X, dX=None):
         n_samples, _ = X.shape
-        out = np.zeros((n_samples, self.n_outputs))  # pre-allocate results
-        for estimator in self.estimators_:
-            if self.is_classifier:
-                out += estimator.predict_proba(X)  # classification
-            else:
-                if self.n_outputs > 1:
-                    out += estimator.predict(X)  # multi-variate regression
-                else:
-                    out += estimator.predict(X).reshape(
-                        n_samples, -1
-                    )  # univariate regression
+        
+        all_predictions = []
 
-        return out / self.n_splits  # return the average prediction
+        for estimator in self.estimators_:
+            # During inference, we rely on the standard predict_proba/predict
+            # and calculate the ensemble uncertainty ourselves.
+            predict_args = {"dX": dX} if dX is not None else {}
+
+            if self.is_classifier:
+                pred = estimator.predict_proba(X, **predict_args)
+                all_predictions.append(pred)
+            else: # Regression
+                pred = estimator.predict(X, **predict_args)
+                if self.n_outputs == 1:
+                    pred = pred.reshape(n_samples, -1)
+                all_predictions.append(pred)
+
+        all_predictions = np.array(all_predictions) # Shape: (n_splits, n_samples, n_outputs)
+        
+        mean_pred = np.mean(all_predictions, axis=0)
+        dX_pred = np.std(all_predictions, axis=0)
+
+        # ADD THIS BLOCK FOR VERIFICATION
+        # ===================================================================
+        #print("\n--- [Verification Step 4: KFoldWrapper Inference] ---")
+        #print(f"Shape of all predictions collected: {all_predictions.shape}")
+        #print("Sample of final mean prediction:\n", mean_pred[:2, :])
+        #print("Sample of final dX dev prediction:\n", dX_pred[:2, :])
+        # ===================================================================
+
+        return mean_pred, dX_pred
