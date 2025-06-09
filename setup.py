@@ -5,8 +5,8 @@ from numpy.distutils.core import setup
 
 
 # Project Information
-DISTNAME = "deep-forest"
-DESCRIPTION = "Deep Forest"
+DISTNAME = "probabilistic-deep-forest"
+DESCRIPTION = "Probabilistic Deep Forest"
 with open("README.rst") as f:
     LONG_DESCRIPTION = f.read()
 MAINTAINER = "Yi-Xuan Xu"
