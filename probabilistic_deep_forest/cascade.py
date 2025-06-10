@@ -769,7 +769,8 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             return self.n_estimators * self.n_outputs_
 
     # flake8: noqa: E501
-    def fit(self, X, y, sample_weight=None, dX=None, py=None):
+    def fit(self, X, y=None, sample_weight=None, dX=None, py=None):
+        
         X, y = check_X_y(
             X,
             y,
@@ -1421,7 +1422,15 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
     @deepforest_model_doc(
         """Build a deep forest using the training data.""", "classifier_fit"
     )
-    def fit(self, X, y, sample_weight=None, dX=None, py=None):
+    def fit(self, X, y=None, sample_weight=None, dX=None, py=None):
+        if y is None:
+            if py is None:
+                raise ValueError(
+                    "Either `y` (discrete labels) or `py` (probabilistic labels) "
+                    "must be provided."
+                )
+            y = np.argmax(py, axis=1)
+        
         X, y = check_X_y(
             X,
             y,
