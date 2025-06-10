@@ -375,7 +375,7 @@ class CustomCascadeLayer(object):
         # Internal container
         self.estimators_ = {}
 
-    def fit_transform(self, X, y, dX=None, sample_weight=None):
+    def fit_transform(self, X, y, dX=None, py=None, sample_weight=None):
         
         n_samples, _ = X.shape
         X_aug = []
@@ -398,19 +398,10 @@ class CustomCascadeLayer(object):
                     msg.format(_utils.ctime(), estimator_idx, self.layer_idx)
                 )
 
-            kfold_estimator.fit_transform(X, y, dX=dX, sample_weight=sample_weight)
+            kfold_estimator.fit_transform(X, y, dX=dX, py=py, sample_weight=sample_weight)
             X_aug.append(kfold_estimator.oob_decision_function_)
             X_aug_dX.append(kfold_estimator.oob_decision_function_dX_)
             key = "{}-{}-custom".format(self.layer_idx, estimator_idx)
-
-            # ADD THIS BLOCK FOR VERIFICATION
-            # ===================================================================
-            #print(f"\n--- [Verification Step 2: KFoldWrapper Output for Estimator {estimator_idx}] ---")
-            #print(f"OOB Predictions (Mean) shape: {kfold_estimator.oob_decision_function_.shape}")
-            #print(f"OOB Predictions (dX Dev) shape: {kfold_estimator.oob_decision_function_dX_.shape}")
-            #print("Sample of OOB dX Dev:\n", kfold_estimator.oob_decision_function_dX_[:3, :])
-            # ===================================================================
-            
 
             if self.partial_mode:
                 # Cache the fitted estimator in out-of-core mode

@@ -545,12 +545,15 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
     def __getitem__(self, index):
         return self._get_layer(index)
 
-    def _get_n_output(self, y):
+    def _get_n_output(self, y, py=None):
         """Return the number of output inferred from the training labels."""
         if is_classifier(self):
-            n_output = np.unique(y).shape[0]  # classification
-            return n_output
-        return y.shape[1] if len(y.shape) > 1 else 1  # regression
+            if py is not None:
+                if py.ndim != 2:
+                    raise ValueError("py should be a 2D array.")
+                return py.shape[1]
+            return np.unique(y).shape[0]
+        return y.shape[1] if len(y.shape) > 1 else 1
 
     def _make_layer(self, **layer_args):
         """Make and configure a cascade layer."""
@@ -651,14 +654,14 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             )
             raise ValueError(msg)
 
-    def _check_input(self, X, y=None):
+    def _check_input(self, X, y=None, py=None):
         """
         Check the input data and set the attributes if X is training data."""
         is_training_data = y is not None
 
         if is_training_data:
             _, self.n_features_ = X.shape
-            self.n_outputs_ = self._get_n_output(y)
+            self.n_outputs_ = self._get_n_output(y, py)
 
     def _validate_params(self):
         """
@@ -766,7 +769,7 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             return self.n_estimators * self.n_outputs_
 
     # flake8: noqa: E501
-    def fit(self, X, y, sample_weight=None, dX=None):
+    def fit(self, X, y, sample_weight=None, dX=None, py=None):
         X, y = check_X_y(
             X,
             y,
@@ -776,12 +779,6 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             else False,
         )
 
-        self.layers_ = {}
-        self.binners_ = {}
-        self.n_layers_ = 0
-        if hasattr(self, "buffer_") and self.partial_mode:
-            self.buffer_.clear()
-
         if dX is None:
             # If no initial uncertainty is provided, assume zero uncertainty for compatibility
             dX = np.zeros_like(X)
@@ -789,6 +786,13 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             # Ensure dX has the same number of samples as X
             if dX.shape[0] != X.shape[0]:
                 raise ValueError("X and dX must have the same number of samples.")
+
+
+        self.layers_ = {}
+        self.binners_ = {}
+        self.n_layers_ = 0
+        if hasattr(self, "buffer_") and self.partial_mode:
+            self.buffer_.clear()
 
         self._check_input(X, y)
         self._validate_params()
@@ -836,7 +840,7 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
         tic = time.time()
         # The first layer is trained ONLY on the original data
         X_aug_train_, dX_aug_train_ = layer_.fit_transform(
-            X_train_, y, dX=dX_train_, sample_weight=sample_weight
+            X_train_, y, dX=dX_train_,  py=py, sample_weight=sample_weight
         )
         toc = time.time()
         training_time = toc - tic
@@ -899,7 +903,7 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
 
             tic = time.time()
             new_X_aug, new_dX_aug = layer_.fit_transform(
-                X_middle_train, y, dX=dX_middle_train, sample_weight=sample_weight
+                X_middle_train, y, dX=dX_middle_train,  py=py, sample_weight=sample_weight
             )
             toc = time.time()
             training_time = toc - tic
@@ -1417,7 +1421,7 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
     @deepforest_model_doc(
         """Build a deep forest using the training data.""", "classifier_fit"
     )
-    def fit(self, X, y, sample_weight=None, dX=None):
+    def fit(self, X, y, sample_weight=None, dX=None, py=None):
         X, y = check_X_y(
             X,
             y,
@@ -1429,7 +1433,7 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
         # Check the input for classification
         y = self._encode_class_labels(y)
 
-        super().fit(X, y, sample_weight, dX)
+        super().fit(X, y, sample_weight, dX, py)
 
     def predict_proba(self, X, dX=None):
 

@@ -45,7 +45,7 @@ class KFoldWrapper(object):
         return self.estimators_
 
     # Accepts dX and returns both mean and dX OOB predictions
-    def fit_transform(self, X, y, dX=None, sample_weight=None):
+    def fit_transform(self, X, y, dX=None, py=None, sample_weight=None):
         n_samples, _ = X.shape
         splitter = KFold(
             n_splits=self.n_splits,
@@ -69,10 +69,11 @@ class KFoldWrapper(object):
             X_val = X[val_idx]
             X_train_dX = dX[train_idx] if dX is not None else None
             X_val_dX = dX[val_idx] if dX is not None else None
-            
+            py_train = py[train_idx] if py is not None else None
+
             # Fit on training samples
             # Assumes your custom estimator's `fit` can handle dX if needed.
-            fit_args = {"dX": X_train_dX} if X_train_dX is not None else {}
+            fit_args = {"dX": X_train_dX, "py": py_train}
             if sample_weight is None:
                 estimator.fit(X_train, y_train, **fit_args)
             else:
