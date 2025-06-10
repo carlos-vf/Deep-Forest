@@ -776,6 +776,11 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             else False,
         )
 
+        self.layers_ = {}
+        self.binners_ = {}
+        self.n_layers_ = 0
+        if hasattr(self, "buffer_") and self.partial_mode:
+            self.buffer_.clear()
 
         if dX is None:
             # If no initial uncertainty is provided, assume zero uncertainty for compatibility
@@ -799,7 +804,6 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
         # Keep a permanent copy of the original binned data and its uncertainty
         X_train_ = self._bin_data(binner_, X, is_training_data=True)
         dX_train_ = dX
-        self._set_binner(0, binner_)
 
         # =====================================================================
         # Training Stage
@@ -860,31 +864,6 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
         self._set_binner(0, binner_)
         self.n_layers_ += 1
 
-        # Pre-allocate the global array on storing training data
-        #X_middle_train_ = _utils.init_array(X_train_, self.n_aug_features_)
-        #X_middle_train_dX_ = _utils.init_array(dX_train_, self.n_aug_features_)
-
-        # ===================================================================
-        # ADD THIS VERIFICATION BLOCK
-        # ===================================================================
-        #print("\n" + "="*50)
-        #print("--- [VERIFICATION] Analysis of Layer 0 Output ---")
-        #print(f"OOB Performance (Accuracy) of Layer 0: {pivot*100:.2f}%")
-        
-        # Analyze the augmented features (mean predictions)
-        #print(f"\nShape of Augmented Features (X_aug): {X_aug_train_.shape}")
-        #print("Sample of Augmented Features (first 3 samples, first 5 features):")
-        #print(X_aug_train_[:3, :5])
-
-        # Analyze the augmented uncertainties
-        #print(f"\nShape of Augmented Uncertainties (dX_aug): {dX_aug_train_.shape}")
-        #print("Sample of Augmented Uncertainties (first 3 samples, first 5 features):")
-        #print(dX_aug_train_[:3, :5])
-        
-        #print("\nStatistics for the first uncertainty vector (dX_aug[:, 0]):")
-
-
-
         # ====================================================================
         # Main loop on the training stage
         # ====================================================================
@@ -892,24 +871,9 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
         while self.n_layers_ < self.max_layers:
             layer_idx = self.n_layers_
 
-            # Set the binner
-            #aug_binner_ = Binner(
-            #    n_bins=self.n_bins,
-            #    bin_subsample=self.bin_subsample,
-            #    bin_type=self.bin_type,
-            #    random_state=self.random_state,
-            #)
-            #X_aug_binned_ = self._bin_data(aug_binner_, X_aug_train_, is_training_data=True)
-
             # Construct the input for the current layer.
-            #X_middle_train = np.hstack([X_train_, X_aug_binned_])
             X_middle_train = np.hstack([X_train_, X_aug_train_])
             dX_middle_train = np.hstack([dX_train_, dX_aug_train_])
-
-            # We only bin the augmented part, not the whole X_middle_train
-            #X_middle_train[:, self.n_features_:] = aug_binner_.fit_transform(
-            #    X_middle_train[:, self.n_features_:]
-            #)
 
             # Build a cascade layer
             layer_ = self._make_layer(
@@ -928,10 +892,6 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
                 random_state=self.random_state,
                 verbose=self.verbose,
             )
-
-            #X_middle_train_ = self.buffer_.cache_data(
-            #    layer_idx, X_middle_train_, is_training_data=True
-            #)
 
             if self.verbose > 0:
                 msg = "{} Fitting cascade layer = {:<2}"
@@ -970,7 +930,6 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
                 dX_aug_train_ = new_dX_aug
                 pivot = new_pivot
                 self._set_layer(layer_idx, layer_)
-                #self._set_binner(layer_idx, aug_binner_) 
                 self.n_layers_ += 1
                 n_counter = 0
                 if self.use_predictor:
