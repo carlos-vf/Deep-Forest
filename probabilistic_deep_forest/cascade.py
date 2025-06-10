@@ -1486,8 +1486,8 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
         if self.verbose > 0:
             print("{} Start to evalute the model:".format(_utils.ctime()))
 
-        binner_0 = self._get_binner(0)
-        X_test_ = self._bin_data(binner_0, X, is_training_data=False)
+        binner_ = self._get_binner(0)
+        X_test_ = self._bin_data(binner_, X, is_training_data=False)
         dX_test_ = dX
 
         layer_0 = self._get_layer(0)
