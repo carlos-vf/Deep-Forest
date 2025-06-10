@@ -799,6 +799,7 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
         # Keep a permanent copy of the original binned data and its uncertainty
         X_train_ = self._bin_data(binner_, X, is_training_data=True)
         dX_train_ = dX
+        self._set_binner(0, binner_)
 
         # =====================================================================
         # Training Stage
@@ -863,24 +864,24 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
         #X_middle_train_ = _utils.init_array(X_train_, self.n_aug_features_)
         #X_middle_train_dX_ = _utils.init_array(dX_train_, self.n_aug_features_)
 
-                # ===================================================================
+        # ===================================================================
         # ADD THIS VERIFICATION BLOCK
         # ===================================================================
-        print("\n" + "="*50)
-        print("--- [VERIFICATION] Analysis of Layer 0 Output ---")
-        print(f"OOB Performance (Accuracy) of Layer 0: {pivot*100:.2f}%")
+        #print("\n" + "="*50)
+        #print("--- [VERIFICATION] Analysis of Layer 0 Output ---")
+        #print(f"OOB Performance (Accuracy) of Layer 0: {pivot*100:.2f}%")
         
         # Analyze the augmented features (mean predictions)
-        print(f"\nShape of Augmented Features (X_aug): {X_aug_train_.shape}")
-        print("Sample of Augmented Features (first 3 samples, first 5 features):")
-        print(X_aug_train_[:3, :5])
+        #print(f"\nShape of Augmented Features (X_aug): {X_aug_train_.shape}")
+        #print("Sample of Augmented Features (first 3 samples, first 5 features):")
+        #print(X_aug_train_[:3, :5])
 
         # Analyze the augmented uncertainties
-        print(f"\nShape of Augmented Uncertainties (dX_aug): {dX_aug_train_.shape}")
-        print("Sample of Augmented Uncertainties (first 3 samples, first 5 features):")
-        print(dX_aug_train_[:3, :5])
+        #print(f"\nShape of Augmented Uncertainties (dX_aug): {dX_aug_train_.shape}")
+        #print("Sample of Augmented Uncertainties (first 3 samples, first 5 features):")
+        #print(dX_aug_train_[:3, :5])
         
-        print("\nStatistics for the first uncertainty vector (dX_aug[:, 0]):")
+        #print("\nStatistics for the first uncertainty vector (dX_aug[:, 0]):")
 
 
 
@@ -892,12 +893,12 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
             layer_idx = self.n_layers_
 
             # Set the binner
-            aug_binner_ = Binner(
-                n_bins=self.n_bins,
-                bin_subsample=self.bin_subsample,
-                bin_type=self.bin_type,
-                random_state=self.random_state,
-            )
+            #aug_binner_ = Binner(
+            #    n_bins=self.n_bins,
+            #    bin_subsample=self.bin_subsample,
+            #    bin_type=self.bin_type,
+            #    random_state=self.random_state,
+            #)
             #X_aug_binned_ = self._bin_data(aug_binner_, X_aug_train_, is_training_data=True)
 
             # Construct the input for the current layer.
@@ -969,7 +970,7 @@ class BaseCascadeForest(BaseEstimator, metaclass=ABCMeta):
                 dX_aug_train_ = new_dX_aug
                 pivot = new_pivot
                 self._set_layer(layer_idx, layer_)
-                self._set_binner(layer_idx, aug_binner_) 
+                #self._set_binner(layer_idx, aug_binner_) 
                 self.n_layers_ += 1
                 n_counter = 0
                 if self.use_predictor:
@@ -1472,24 +1473,10 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
         super().fit(X, y, sample_weight, dX)
 
     def predict_proba(self, X, dX=None):
-        """
-        Predict class probabilities for X.
 
-        Parameters
-        ----------
-        X : :obj: array-like of shape (n_samples, n_features)
-            The input samples. Internally, its dtype will be converted to
-            ``np.uint8``.
-
-        Returns
-        -------
-        proba : :obj:`numpy.ndarray` of shape (n_samples, n_classes)
-            The class probabilities of the input samples.
-        """
         X = check_array(X)
 
         if dX is None:
-            # If no uncertainty is provided for prediction, assume zero
             dX = np.zeros_like(X)
         
         if not self.is_fitted_:
@@ -1499,8 +1486,8 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
         if self.verbose > 0:
             print("{} Start to evalute the model:".format(_utils.ctime()))
 
-        binner_ = self._get_binner(0)
-        X_test_ = self._bin_data(binner_, X, is_training_data=False)
+        binner_0 = self._get_binner(0)
+        X_test_ = self._bin_data(binner_0, X, is_training_data=False)
         dX_test_ = dX
 
         layer_0 = self._get_layer(0)
@@ -1514,11 +1501,7 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
                 print(msg.format(_utils.ctime(), layer_idx))
 
             # Construct the input for the current layer
-            # [Original Binned Features, Augmented Features from Previous Layer]
-            aug_binner_ = self._get_binner(layer_idx)
-            X_aug_binned = self._bin_data(aug_binner_, X_aug_test, is_training_data=False)
-
-            X_middle_test = np.hstack([X_test_, X_aug_binned])
+            X_middle_test = np.hstack([X_test_, X_aug_test])
             dX_middle_test = np.hstack([dX_test_, dX_aug_test])
 
             # Get the current layer and transform the data
@@ -1527,9 +1510,7 @@ class CascadeForestClassifier(BaseCascadeForest, ClassifierMixin):
             # The output becomes the new augmented features for the next iteration
             X_aug_test, dX_aug_test = layer.transform(X_middle_test, dX=dX_middle_test)
 
-        # 3. Final Prediction
-        # After the last layer, X_aug_test contains the final set of class vectors.
-        # We average these to get the final prediction.
+        # Final Prediction
         proba = _utils.merge_proba(X_aug_test, self.n_outputs_)
 
         return proba
