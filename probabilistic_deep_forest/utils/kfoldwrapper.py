@@ -83,13 +83,13 @@ class KFoldWrapper(object):
             # Predict on hold-out samples
             # both the mean prediction and its standard deviation.
             if self.is_classifier:
-                if not hasattr(estimator, "predict_proba_with_dX"):
+                if not hasattr(estimator, "predict_proba_with_std"):
                     msg = ("Custom estimator must have a `predict_proba_with_dX` "
                            "method to be used for uncertainty estimation.")
                     raise AttributeError(msg)
                 
                 # Get both mean and dX from the custom estimator
-                mean_pred, dX_pred = estimator.predict_proba_with_dX(X_val, dX=X_val_dX)
+                mean_pred, dX_pred = estimator.predict_proba_with_std(X_val, dX=X_val_dX)
                 self.oob_decision_function_[val_idx] += mean_pred
                 self.oob_decision_function_dX_[val_idx] += dX_pred
             else: # Regression
