@@ -72,7 +72,6 @@ class KFoldWrapper(object):
             py_train = py[train_idx] if py is not None else None
 
             # Fit on training samples
-            # Assumes your custom estimator's `fit` can handle dX if needed.
             fit_args = {"dX": X_train_dX, "py": py_train}
             if sample_weight is None:
                 estimator.fit(X_train, y_train, **fit_args)
@@ -123,8 +122,6 @@ class KFoldWrapper(object):
         all_predictions = []
 
         for estimator in self.estimators_:
-            # During inference, we rely on the standard predict_proba/predict
-            # and calculate the ensemble uncertainty ourselves.
             predict_args = {"dX": dX} if dX is not None else {}
 
             if self.is_classifier:
@@ -136,17 +133,9 @@ class KFoldWrapper(object):
                     pred = pred.reshape(n_samples, -1)
                 all_predictions.append(pred)
 
-        all_predictions = np.array(all_predictions) # Shape: (n_splits, n_samples, n_outputs)
+        all_predictions = np.array(all_predictions)
         
         mean_pred = np.mean(all_predictions, axis=0)
         dX_pred = np.std(all_predictions, axis=0)
-
-        # ADD THIS BLOCK FOR VERIFICATION
-        # ===================================================================
-        #print("\n--- [Verification Step 4: KFoldWrapper Inference] ---")
-        #print(f"Shape of all predictions collected: {all_predictions.shape}")
-        #print("Sample of final mean prediction:\n", mean_pred[:2, :])
-        #print("Sample of final dX dev prediction:\n", dX_pred[:2, :])
-        # ===================================================================
 
         return mean_pred, dX_pred
